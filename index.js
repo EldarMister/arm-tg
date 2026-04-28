@@ -114,16 +114,24 @@ async function checkForUpdates() {
       if (izmeneniya.length === 0) continue;
 
       const lastUpdatedAt = new Date().toISOString();
-      await db.obnovitSnapshot(sub.container, newRow, lastUpdatedAt);
 
       const text =
         `🔔 *Обновление по контейнеру* \`${key}\`\n\n` +
         `*Изменения:*\n${izmeneniya.join('\n')}\n\n` +
         `*Актуальный статус:*\n${formatStatus(newRow, lastUpdatedAt)}`;
 
+      let sentCount = 0;
       for (const cid of sub.chat_ids) {
-        await bot.sendMessage(cid, text, { parse_mode: 'Markdown' })
-          .catch(err => console.error(`notify ${cid}:`, err.message));
+        try {
+          await bot.sendMessage(cid, text, { parse_mode: 'Markdown' });
+          sentCount += 1;
+        } catch (err) {
+          console.error(`notify ${cid}:`, err.message);
+        }
+      }
+
+      if (sentCount > 0) {
+        await db.obnovitSnapshot(sub.container, newRow, lastUpdatedAt);
       }
     }
   } catch (err) { console.error('checkForUpdates error:', err.message); }
