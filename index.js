@@ -129,7 +129,7 @@ async function checkForUpdates() {
   } catch (err) { console.error('checkForUpdates error:', err.message); }
 }
 
-setInterval(checkForUpdates, 60 * 60 * 1000);
+setInterval(checkForUpdates, 5 * 60 * 1000);
 
 // ─── Админ: панель управления пользователями (inline) ────────────────────────
 
