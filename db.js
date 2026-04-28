@@ -1,9 +1,18 @@
 const { Pool } = require('pg');
+const { extractContainerNumber, getEnv, normalizeContainerKey } = require('./env');
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: getEnv('DATABASE_URL'),
   ssl: { rejectUnauthorized: false },
 });
+
+function dbContainerKey(container) {
+  return extractContainerNumber(container) || normalizeContainerKey(container);
+}
+
+function legacyContainerKey(container) {
+  return String(container ?? '').toUpperCase().trim();
+}
 
 async function initDB() {
   await pool.query(`
@@ -26,7 +35,7 @@ async function initDB() {
     ALTER TABLE tg_users ADD COLUMN IF NOT EXISTS username TEXT;
   `);
 
-  const initialAdmin = process.env.INITIAL_ADMIN_ID;
+  const initialAdmin = getEnv('INITIAL_ADMIN_ID');
   if (initialAdmin) {
     await pool.query(`
       INSERT INTO tg_users (chat_id, role, name)
@@ -67,7 +76,7 @@ async function updateUserInfo(chatId, username, name) {
 }
 
 async function deleteUser(chatId) {
-  const initialAdmin = process.env.INITIAL_ADMIN_ID;
+  const initialAdmin = getEnv('INITIAL_ADMIN_ID');
   if (initialAdmin && String(chatId) === String(initialAdmin)) return false;
   const res = await pool.query(
     'DELETE FROM tg_users WHERE chat_id = $1 RETURNING chat_id',
@@ -94,7 +103,7 @@ async function getUserRole(chatId) {
 // ── Подписки ─────────────────────────────────────────────────────────────────
 
 async function podpisat(chatId, container, snapshot) {
-  const key = container.toUpperCase();
+  const key = dbContainerKey(container);
   const cid = String(chatId);
   await pool.query(`
     INSERT INTO tg_subscriptions (container, chat_ids, snapshot)
@@ -123,15 +132,21 @@ async function getVseSubscriptions() {
 }
 
 async function obnovitSnapshot(container, snapshot, lastUpdatedAt) {
+  const key = dbContainerKey(container);
+  const legacyKey = legacyContainerKey(container);
   await pool.query(`
-    UPDATE tg_subscriptions SET snapshot = $2::jsonb, last_updated_at = $3 WHERE container = $1
-  `, [container.toUpperCase(), JSON.stringify(snapshot), lastUpdatedAt]);
+    UPDATE tg_subscriptions
+    SET snapshot = $2::jsonb, last_updated_at = $3
+    WHERE container = $1 OR container = $4
+  `, [key, JSON.stringify(snapshot), lastUpdatedAt, legacyKey]);
 }
 
 async function getSubscription(container) {
+  const key = dbContainerKey(container);
+  const legacyKey = legacyContainerKey(container);
   const res = await pool.query(
-    'SELECT * FROM tg_subscriptions WHERE container = $1',
-    [container.toUpperCase()]
+    'SELECT * FROM tg_subscriptions WHERE container = $1 OR container = $2 LIMIT 1',
+    [key, legacyKey]
   );
   return res.rows[0] || null;
 }

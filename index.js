@@ -9,8 +9,9 @@ const {
   isAdmin, canSeeDocs,
 } = require('./users');
 const db = require('./db');
+const { extractContainerNumber, getEnv, normalizeContainerKey } = require('./env');
 
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+const bot = new TelegramBot(getEnv('TELEGRAM_BOT_TOKEN'), { polling: true });
 
 const userState = new Map();
 const ozhidaemyeImena = new Map();
@@ -55,9 +56,9 @@ async function sendWelcome(chatId) {
 // ─── Документы из Google Drive ───────────────────────────────────────────────
 
 async function sendDocs(chatId, containerNomer) {
-  const key = containerNomer.toUpperCase();
+  const key = extractContainerNumber(containerNomer) || containerNomer.trim();
   try {
-    const files = await getContainerFiles(key);
+    const files = await getContainerFiles(containerNomer);
     if (files === null) {
       await bot.sendMessage(chatId,
         `📁 Папка для контейнера \`${key}\` не найдена.\n\nВозможно, документы ещё не загружены.`,
@@ -82,7 +83,7 @@ async function sendDocs(chatId, containerNomer) {
         });
       } catch (err) {
         console.error(`sendDocument (${file.name}):`, err.message);
-        await bot.sendMessage(chatId, `⚠️ Не удалось отправить: ${file.name}`);
+        await bot.sendMessage(chatId, `⚠️ Не удалось отправить: ${file.path || file.name}`);
       }
     }
   } catch (err) {
@@ -99,8 +100,8 @@ async function checkForUpdates() {
     if (subs.length === 0) return;
     const rows = await loadSheetFresh();
     for (const sub of subs) {
-      const key = sub.container;
-      const newRow = rows.find(r => String(r[0]).toUpperCase().trim() === key);
+      const key = extractContainerNumber(sub.container) || normalizeContainerKey(sub.container);
+      const newRow = rows.find(r => extractContainerNumber(r[0]) === key);
       if (!newRow) continue;
 
       const oldSnap = Array.isArray(sub.snapshot) ? sub.snapshot : [];
@@ -113,7 +114,7 @@ async function checkForUpdates() {
       if (izmeneniya.length === 0) continue;
 
       const lastUpdatedAt = new Date().toISOString();
-      await db.obnovitSnapshot(key, newRow, lastUpdatedAt);
+      await db.obnovitSnapshot(sub.container, newRow, lastUpdatedAt);
 
       const text =
         `🔔 *Обновление по контейнеру* \`${key}\`\n\n` +
@@ -199,10 +200,14 @@ bot.onText(/^\/myid$/, async (msg) => {
 
 bot.onText(/^\/debug (.+)$/, async (msg, match) => {
   if (!await isAdmin(msg.chat.id)) return;
-  const nomer = match[1].trim().toUpperCase();
+  const nomer = match[1].trim();
   try {
     const rows = await loadSheetFresh();
-    const row = rows.find(r => String(r[0]).toUpperCase().trim() === nomer);
+    const target = extractContainerNumber(nomer) || normalizeContainerKey(nomer);
+    const row = rows.find(r => {
+      const rowContainer = extractContainerNumber(r[0]);
+      return rowContainer ? rowContainer === target : normalizeContainerKey(r[0]) === target;
+    });
     if (!row) { await bot.sendMessage(msg.chat.id, `❌ Контейнер ${nomer} не найден`); return; }
     let text = `🔍 Колонки для *${nomer}*:\n\n`;
     row.forEach((val, i) => { text += `\`[${i}]\`: ${val || '_(пусто)_'}\n`; });
@@ -261,7 +266,7 @@ bot.on('callback_query', async (query) => {
 
   if (data.startsWith('u_del:')) {
     const targetId = data.split(':')[1];
-    if (String(targetId) === String(process.env.INITIAL_ADMIN_ID)) {
+    if (String(targetId) === String(getEnv('INITIAL_ADMIN_ID'))) {
       await bot.sendMessage(chatId, '🚫 Главного админа удалить нельзя.');
       return;
     }
@@ -388,7 +393,7 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  const looksLikeKontejner = /^[A-Za-z]{4}\d{6,8}$/.test(tekst);
+  const looksLikeKontejner = !!extractContainerNumber(tekst);
   if (state === 'wait_nomer' || looksLikeKontejner) {
     userState.set(chatId, 'idle');
     try {
@@ -398,9 +403,9 @@ bot.on('message', async (msg) => {
           'Здравствуйте! 😊\n\n📦 Трекинг контейнера появляется через 5 дней после погрузки.\n\n🔎 Пожалуйста, проверьте правильность номера контейнера.');
         return;
       }
-      const sub = await db.getSubscription(tekst.toUpperCase());
+      const sub = await db.getSubscription(tekst);
       await bot.sendMessage(chatId, formatStatus(row, sub?.last_updated_at), { parse_mode: 'Markdown' });
-      await db.podpisat(chatId, tekst, row);
+      await db.podpisat(chatId, extractContainerNumber(tekst) || tekst, row);
     } catch (err) {
       console.error('sheet error:', err.message);
       await bot.sendMessage(chatId, '⚠️ Не удалось получить данные. Попробуйте позже.');
